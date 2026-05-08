@@ -30,10 +30,12 @@ FONT_PATHS = [
     "/System/Library/Fonts/AppleSDGothicNeo.ttc",
     "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
     "/Library/Fonts/NanumGothic.ttf",
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
 ]
 
 import shutil
-TESSERACT_CMD = shutil.which("tesseract") or "/opt/homebrew/bin/tesseract"
+TESSERACT_CMD = shutil.which("tesseract") or "/usr/bin/tesseract"
 
 
 def get_font(size: int):
