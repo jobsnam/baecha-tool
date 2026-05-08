@@ -8,13 +8,23 @@ from PIL import Image
 from cut_and_stamp import extract_date_from_image, find_section_headers, stamp_image
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB
+app.config["MAX_CONTENT_LENGTH"] = 120 * 1024 * 1024  # 120MB (다장 업로드)
 
 ALLOWED_EXT = {".png", ".jpg", ".jpeg"}
 
 
 def allowed(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_EXT
+
+
+@app.errorhandler(413)
+def too_large(_e):
+    return jsonify(
+        {
+            "error": "업로드 용량이 너무 큽니다. 한 번에 올리는 용량을 줄이거나(예: 5장씩), "
+            "이미지 해상도를 낮춰 보세요."
+        }
+    ), 413
 
 
 @app.route("/")
@@ -58,7 +68,10 @@ def process():
                 continue
 
             try:
-                img = Image.open(file.stream).convert("RGB")
+                raw = file.read()
+                if not raw:
+                    continue
+                img = Image.open(io.BytesIO(raw)).convert("RGB")
                 date_text, day_text = extract_date_from_image(img)
 
                 if not date_text:
