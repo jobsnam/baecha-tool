@@ -180,11 +180,12 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" crossorigin="anonymous"></script>
 </head>
 <body>
 <div class="card">
   <h1>배차일보 절개 도구</h1>
-  <p class="subtitle">이미지를 업로드하면 노선 구역을 자동으로 잘라내고 날짜를 삽입합니다.</p>
+  <p class="subtitle">이미지를 업로드하면 노선 구역을 자동으로 잘라내고 날짜를 삽입합니다. 4장 이상이면 서버 부담을 줄이기 위해 <strong>3장씩 나눠</strong> 처리한 뒤 ZIP은 한 번에 합쳐 드립니다.</p>
 
   <!-- 드롭존 -->
   <div class="dropzone" id="dropzone">
@@ -230,6 +231,9 @@
   const sepBtn     = document.getElementById('process-separate');
   const indivBox   = document.getElementById('individual-downloads');
   const status     = document.getElementById('status');
+
+  /** 한 요청에 너무 많이 넣으면(특히 OCR) Render 502·시간 제한에 걸릴 수 있어 나눔 */
+  const BATCH_SIZE = 3;
 
   let files = [];
 
@@ -282,70 +286,158 @@
     indivBox.innerHTML = '';
   }
 
+  function buildFormData(chunk, route, size, delivery) {
+    const fd = new FormData();
+    chunk.forEach(f => fd.append('files', f));
+    fd.append('route', route);
+    fd.append('size', size);
+    fd.append('color', 'cc0000');
+    fd.append('delivery', delivery);
+    return fd;
+  }
+
+  function humanHttpError(status, text) {
+    if (status === 502 || status === 503 || status === 504) {
+      return '서버 연결이 중간에 끊겼습니다(오류 ' + status + '). '
+        + '한 번에 많은 장을 처리하면 클라우드 제한에 걸릴 수 있어, 자동으로 나눠 처리합니다. '
+        + '페이지를 새로고침한 뒤 다시 시도해 보세요.';
+    }
+    if (text && /<!DOCTYPE|<html[\s>]/i.test(text)) {
+      return '서버 오류(응답 ' + status + '). 잠시 후 다시 시도하거나 장 수를 줄여 보세요.';
+    }
+    return null;
+  }
+
+  function parseErrorMessage(status, text) {
+    const friendly = humanHttpError(status, text);
+    if (friendly) return friendly;
+    let msg = 'HTTP ' + status;
+    try {
+      const data = JSON.parse(text);
+      if (data && data.error) msg = data.error;
+      else if (data && typeof data === 'object') msg = JSON.stringify(data);
+    } catch {
+      const t = (text || '').trim();
+      if (t && t.length < 500) msg = t;
+      else if (t) msg = t.slice(0, 400) + '…';
+    }
+    return msg;
+  }
+
   async function runProcess(delivery) {
     if (!files.length) return;
 
     const route = document.getElementById('route').value.trim() || '5002';
     const size  = document.getElementById('size').value  || '58';
-
-    const fd = new FormData();
-    files.forEach(f => fd.append('files', f));
-    fd.append('route', route);
-    fd.append('size',  size);
-    fd.append('color', 'cc0000');
-    fd.append('delivery', delivery);
+    const total = files.length;
 
     zipBtn.disabled = sepBtn.disabled = true;
     indivBox.style.display = 'none';
     indivBox.innerHTML = '';
-    status.innerHTML = '<span class="spinner"></span><span class="status-info">처리 중입니다… 여러 장이면 1~3분 걸릴 수 있어요.</span>';
+    status.innerHTML = '<span class="spinner"></span><span class="status-info">처리 준비 중…</span>';
 
     try {
-      const res = await fetch('/process', { method: 'POST', body: fd });
-      const ct = (res.headers.get('content-type') || '').toLowerCase();
-
-      if (!res.ok) {
-        const text = await res.text();
-        let msg = `HTTP ${res.status}`;
-        try {
-          const data = JSON.parse(text);
-          if (data && data.error) msg = data.error;
-          else if (data && typeof data === 'object') msg = JSON.stringify(data);
-        } catch {
-          const t = text.trim();
-          if (t) msg = t.length > 400 ? `${t.slice(0, 400)}…` : t;
-        }
-        status.innerHTML = `<span class="status-err">오류: ${escapeHtml(msg)}</span>`;
-        return;
+      if (total <= BATCH_SIZE) {
+        await runProcessSingle(delivery, files, route, size, total);
+      } else if (delivery === 'separate') {
+        await runSeparateBatched(route, size, total);
+      } else {
+        await runZipBatched(route, size, total);
       }
-
-      if (delivery === 'separate' && ct.includes('application/json')) {
-        const data = await res.json();
-        if (data.error) {
-          status.innerHTML = `<span class="status-err">오류: ${escapeHtml(data.error)}</span>`;
-          return;
-        }
-        showIndividualDownloads(data.files || [], data.failed || []);
-        const n = data.count || (data.files && data.files.length) || 0;
-        status.innerHTML = `<span class="status-ok">✓ ${n}개 이미지 준비됨. 아래에서 하나씩 눌러 저장하세요.</span>`;
-        return;
-      }
-
-      const blob = await res.blob();
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href     = url;
-      a.download = `${route}번_배차일보.zip`;
-      a.click();
-      URL.revokeObjectURL(url);
-
-      status.innerHTML = `<span class="status-ok">✓ ${files.length}개 처리 완료! ZIP이 다운로드됩니다.</span>`;
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
-      status.innerHTML = `<span class="status-err">오류: ${escapeHtml(m)} (연결 끊김·시간 초과면 장 수를 줄여 다시 시도해 보세요.)</span>`;
+      status.innerHTML = `<span class="status-err">오류: ${escapeHtml(m)}</span>`;
     } finally {
       zipBtn.disabled = sepBtn.disabled = files.length === 0;
     }
+  }
+
+  async function runProcessSingle(delivery, chunk, route, size, totalLabel) {
+    status.innerHTML = `<span class="spinner"></span><span class="status-info">처리 중… (${totalLabel}장)</span>`;
+    const fd = buildFormData(chunk, route, size, delivery);
+    const res = await fetch('/process', { method: 'POST', body: fd });
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+
+    if (!res.ok) {
+      const errBody = await res.text();
+      throw new Error(parseErrorMessage(res.status, errBody));
+    }
+
+    if (delivery === 'separate' && ct.includes('application/json')) {
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      showIndividualDownloads(data.files || [], data.failed || []);
+      const n = data.count || (data.files && data.files.length) || 0;
+      status.innerHTML = `<span class="status-ok">✓ ${n}개 이미지 준비됨. 아래에서 하나씩 눌러 저장하세요.</span>`;
+      return;
+    }
+
+    const blob = await res.blob();
+    triggerDownloadBlob(blob, `${route}번_배차일보.zip`);
+    status.innerHTML = `<span class="status-ok">✓ ${chunk.length}개 처리 완료! ZIP이 다운로드됩니다.</span>`;
+  }
+
+  async function runSeparateBatched(route, size, total) {
+    const allFiles = [];
+    const allFailed = [];
+    for (let start = 0; start < total; start += BATCH_SIZE) {
+      const chunk = files.slice(start, start + BATCH_SIZE);
+      const done = Math.min(start + chunk.length, total);
+      status.innerHTML = `<span class="spinner"></span><span class="status-info">처리 중 ${done}/${total} … (나눠서 전송)</span>`;
+      const fd = buildFormData(chunk, route, size, 'separate');
+      const res = await fetch('/process', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const errBody = await res.text();
+        throw new Error(parseErrorMessage(res.status, errBody));
+      }
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      (data.files || []).forEach(f => allFiles.push(f));
+      (data.failed || []).forEach(f => allFailed.push(f));
+    }
+    showIndividualDownloads(allFiles, allFailed);
+    status.innerHTML = `<span class="status-ok">✓ ${allFiles.length}개 이미지 준비됨. 아래에서 하나씩 눌러 저장하세요.</span>`;
+    if (allFailed.length) {
+      status.innerHTML += `<br><span class="status-err" style="font-size:12px;">건너뜀 ${allFailed.length}건은 아래 목록 참고</span>`;
+    }
+  }
+
+  async function runZipBatched(route, size, total) {
+    if (typeof JSZip === 'undefined') {
+      throw new Error('JSZip 로딩 실패—인터넷 연결을 확인하고 새로고침해 주세요.');
+    }
+    const merged = new JSZip();
+    for (let start = 0; start < total; start += BATCH_SIZE) {
+      const chunk = files.slice(start, start + BATCH_SIZE);
+      const done = Math.min(start + chunk.length, total);
+      status.innerHTML = `<span class="spinner"></span><span class="status-info">ZIP 합치는 중 ${done}/${total} …</span>`;
+      const fd = buildFormData(chunk, route, size, 'zip');
+      const res = await fetch('/process', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const errBody = await res.text();
+        throw new Error(parseErrorMessage(res.status, errBody));
+      }
+      const blob = await res.blob();
+      const inner = await JSZip.loadAsync(blob);
+      for (const name of Object.keys(inner.files)) {
+        const entry = inner.files[name];
+        if (!entry.dir) {
+          merged.file(name, await entry.async('uint8array'));
+        }
+      }
+    }
+    const outBlob = await merged.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+    triggerDownloadBlob(outBlob, `${route}번_배차일보.zip`);
+    status.innerHTML = `<span class="status-ok">✓ ${total}장 모두 처리해 ZIP 한 개로 받습니다.</span>`;
+  }
+
+  function triggerDownloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   zipBtn.addEventListener('click', () => runProcess('zip'));
