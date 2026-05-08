@@ -1,3 +1,4 @@
+import base64
 import io
 import zipfile
 from pathlib import Path
@@ -15,6 +16,44 @@ ALLOWED_EXT = {".png", ".jpg", ".jpeg"}
 
 def allowed(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_EXT
+
+
+def process_uploads(files, route: str, font_size: int, color_hex: str):
+    """업로드 파일들을 처리해 [(저장 파일명, PNG 바이트), ...] 와 오류 목록 반환."""
+    errors: list[str] = []
+    items: list[tuple[str, bytes]] = []
+
+    for file in files:
+        if not file or not allowed(file.filename or ""):
+            continue
+        try:
+            raw = file.read()
+            if not raw:
+                continue
+            img = Image.open(io.BytesIO(raw)).convert("RGB")
+            date_text, day_text = extract_date_from_image(img)
+
+            if not date_text:
+                errors.append(f"{file.filename}: 날짜 읽기 실패")
+                continue
+
+            cropped, err = stamp_image(
+                img, route, date_text, day_text, font_size, color_hex
+            )
+            if err:
+                errors.append(f"{file.filename}: {err}")
+                continue
+
+            date_safe = date_text.replace("/", "-")
+            out_name = f"{route}번_{date_safe}_{Path(file.filename).stem}.png"
+            img_buf = io.BytesIO()
+            cropped.save(img_buf, format="PNG")
+            items.append((out_name, img_buf.getvalue()))
+
+        except Exception as e:
+            errors.append(f"{file.filename}: {e}")
+
+    return items, errors
 
 
 @app.errorhandler(413)
@@ -49,58 +88,43 @@ def scan():
 
 @app.route("/process", methods=["POST"])
 def process():
-    """여러 이미지 업로드 → 지정 노선 크롭 + 날짜 삽입 → ZIP 반환"""
+    """여러 이미지 업로드 → ZIP 또는 개별 파일(JSON base64)."""
     files = request.files.getlist("files")
     route = request.form.get("route", "5002").replace("번", "").strip()
     font_size = int(request.form.get("size", 58))
     color_hex = request.form.get("color", "cc0000").lstrip("#")
+    delivery = request.form.get("delivery", "zip").strip().lower()
 
     if not files:
         return jsonify({"error": "파일을 선택해주세요."}), 400
 
-    zip_buf = io.BytesIO()
-    errors = []
-    processed = 0
+    items, errors = process_uploads(files, route, font_size, color_hex)
 
-    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file in files:
-            if not file or not allowed(file.filename):
-                continue
-
-            try:
-                raw = file.read()
-                if not raw:
-                    continue
-                img = Image.open(io.BytesIO(raw)).convert("RGB")
-                date_text, day_text = extract_date_from_image(img)
-
-                if not date_text:
-                    errors.append(f"{file.filename}: 날짜 읽기 실패")
-                    continue
-
-                cropped, err = stamp_image(
-                    img, route, date_text, day_text, font_size, color_hex
-                )
-                if err:
-                    errors.append(f"{file.filename}: {err}")
-                    continue
-
-                date_safe = date_text.replace("/", "-")
-                out_name = f"{route}번_{date_safe}_{Path(file.filename).stem}.png"
-
-                img_buf = io.BytesIO()
-                cropped.save(img_buf, format="PNG")
-                zf.writestr(out_name, img_buf.getvalue())
-                processed += 1
-
-            except Exception as e:
-                errors.append(f"{file.filename}: {e}")
-
-    if processed == 0:
+    if not items:
         msg = "처리된 파일이 없습니다."
         if errors:
             msg += " 오류: " + " / ".join(errors)
         return jsonify({"error": msg}), 400
+
+    if delivery in ("separate", "single", "files", "one"):
+        payload = {
+            "ok": True,
+            "count": len(items),
+            "files": [
+                {
+                    "filename": name,
+                    "data": base64.b64encode(data).decode("ascii"),
+                }
+                for name, data in items
+            ],
+            "failed": errors or [],
+        }
+        return jsonify(payload)
+
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in items:
+            zf.writestr(name, data)
 
     zip_buf.seek(0)
     zip_name = f"{route}번_배차일보.zip"
