@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>배차일보 절개 도구</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, "Apple SD Gothic Neo", sans-serif;
+      background: #f0f2f5;
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 40px 16px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.10);
+      padding: 40px;
+      width: 100%;
+      max-width: 640px;
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-bottom: 6px;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: #888;
+      margin-bottom: 32px;
+    }
+
+    /* 드롭존 */
+    .dropzone {
+      border: 2px dashed #ccd;
+      border-radius: 12px;
+      padding: 40px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      background: #fafafa;
+      margin-bottom: 24px;
+    }
+    .dropzone.drag-over { border-color: #4f7fff; background: #eef2ff; }
+    .dropzone svg { margin-bottom: 10px; }
+    .dropzone p { color: #666; font-size: 14px; }
+    .dropzone span { color: #4f7fff; font-weight: 600; cursor: pointer; }
+    #file-input { display: none; }
+
+    /* 파일 목록 */
+    #file-list {
+      list-style: none;
+      margin-bottom: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    #file-list li {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #f5f7ff;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 13px;
+      color: #333;
+    }
+    #file-list li .icon { font-size: 16px; }
+    #file-list li .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #file-list li .remove {
+      cursor: pointer; color: #bbb; font-size: 16px; line-height: 1;
+      border: none; background: none; padding: 0;
+    }
+    #file-list li .remove:hover { color: #e55; }
+
+    /* 설정 */
+    .settings {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    label { display: block; font-size: 13px; color: #555; margin-bottom: 6px; font-weight: 500; }
+    input[type="text"], input[type="number"] {
+      width: 100%;
+      border: 1.5px solid #dde;
+      border-radius: 8px;
+      padding: 9px 12px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus { border-color: #4f7fff; }
+
+    /* 버튼 */
+    .btn {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn-primary { background: #cc0000; color: #fff; }
+    .btn-primary:hover { opacity: 0.88; }
+    .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* 상태 */
+    #status {
+      margin-top: 20px;
+      font-size: 13px;
+      text-align: center;
+      min-height: 20px;
+    }
+    .status-ok   { color: #1a7f37; font-weight: 600; }
+    .status-err  { color: #c00;    font-weight: 600; }
+    .status-info { color: #555; }
+
+    /* 스피너 */
+    .spinner {
+      display: inline-block;
+      width: 18px; height: 18px;
+      border: 2px solid #ccc;
+      border-top-color: #cc0000;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>배차일보 절개 도구</h1>
+  <p class="subtitle">이미지를 업로드하면 노선 구역을 자동으로 잘라내고 날짜를 삽입합니다.</p>
+
+  <!-- 드롭존 -->
+  <div class="dropzone" id="dropzone">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#aab" stroke-width="1.5">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+      <polyline points="17 8 12 3 7 8"/>
+      <line x1="12" y1="3" x2="12" y2="15"/>
+    </svg>
+    <p>여기에 파일을 드래그하거나 <span id="browse-btn">클릭해서 선택</span>하세요</p>
+    <p style="margin-top:6px; font-size:12px; color:#aaa;">PNG / JPG · 여러 장 동시 업로드 가능</p>
+    <input type="file" id="file-input" multiple accept=".png,.jpg,.jpeg">
+  </div>
+
+  <!-- 파일 목록 -->
+  <ul id="file-list"></ul>
+
+  <!-- 설정 -->
+  <div class="settings">
+    <div>
+      <label for="route">노선 번호</label>
+      <input type="text" id="route" value="5002" placeholder="예: 5002">
+    </div>
+    <div>
+      <label for="size">글씨 크기</label>
+      <input type="number" id="size" value="58" min="20" max="200">
+    </div>
+  </div>
+
+  <button class="btn btn-primary" id="process-btn" disabled>처리 후 ZIP 다운로드</button>
+  <div id="status"></div>
+</div>
+
+<script>
+  const dropzone   = document.getElementById('dropzone');
+  const fileInput  = document.getElementById('file-input');
+  const browseBtn  = document.getElementById('browse-btn');
+  const fileList   = document.getElementById('file-list');
+  const processBtn = document.getElementById('process-btn');
+  const status     = document.getElementById('status');
+
+  let files = [];
+
+  browseBtn.addEventListener('click', () => fileInput.click());
+  dropzone.addEventListener('click', (e) => {
+    if (e.target !== browseBtn) fileInput.click();
+  });
+
+  dropzone.addEventListener('dragover',  (e) => { e.preventDefault(); dropzone.classList.add('drag-over'); });
+  dropzone.addEventListener('dragleave', ()  => dropzone.classList.remove('drag-over'));
+  dropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropzone.classList.remove('drag-over');
+    addFiles([...e.dataTransfer.files]);
+  });
+
+  fileInput.addEventListener('change', () => {
+    addFiles([...fileInput.files]);
+    fileInput.value = '';
+  });
+
+  function addFiles(newFiles) {
+    newFiles.forEach(f => {
+      if (!files.find(x => x.name === f.name && x.size === f.size)) {
+        files.push(f);
+      }
+    });
+    renderList();
+  }
+
+  function renderList() {
+    fileList.innerHTML = '';
+    files.forEach((f, i) => {
+      const li = document.createElement('li');
+      li.innerHTML = `
+        <span class="icon">🖼</span>
+        <span class="name">${f.name}</span>
+        <button class="remove" data-i="${i}">✕</button>`;
+      fileList.appendChild(li);
+    });
+    fileList.querySelectorAll('.remove').forEach(btn => {
+      btn.addEventListener('click', () => {
+        files.splice(Number(btn.dataset.i), 1);
+        renderList();
+      });
+    });
+    processBtn.disabled = files.length === 0;
+    status.textContent = '';
+  }
+
+  processBtn.addEventListener('click', async () => {
+    if (!files.length) return;
+
+    const route = document.getElementById('route').value.trim() || '5002';
+    const size  = document.getElementById('size').value  || '58';
+
+    const fd = new FormData();
+    files.forEach(f => fd.append('files', f));
+    fd.append('route', route);
+    fd.append('size',  size);
+    fd.append('color', 'cc0000');
+
+    processBtn.disabled = true;
+    status.innerHTML = '<span class="spinner"></span><span class="status-info">처리 중입니다...</span>';
+
+    try {
+      const res = await fetch('/process', { method: 'POST', body: fd });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        status.innerHTML = `<span class="status-err">오류: ${data.error || '알 수 없는 오류'}</span>`;
+        return;
+      }
+
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `${route}번_배차일보.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      status.innerHTML = `<span class="status-ok">✓ ${files.length}개 파일 처리 완료! ZIP 다운로드됩니다.</span>`;
+    } catch (e) {
+      status.innerHTML = `<span class="status-err">오류: ${e.message}</span>`;
+    } finally {
+      processBtn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
