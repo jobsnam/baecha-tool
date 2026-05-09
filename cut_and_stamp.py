@@ -97,36 +97,52 @@ def find_section_headers(img) -> list[tuple[int, str]]:
     return route_headers
 
 
+def _parse_date_ocr_text(text: str) -> tuple[str | None, str | None]:
+    """OCR 텍스트에서 월/일·요일 추출."""
+    DAY_MAP = {"월": "월", "화": "화", "수": "수", "목": "목",
+               "금": "금", "토": "토", "일": "일"}
+    date_str = None
+    m = re.search(r"(\d{1,2})\s*월\s*(\d{1,2})\s*일", text)
+    if m:
+        date_str = f"{m.group(1)}/{m.group(2)}"
+    day_str = None
+    d = re.search(r"([월화수목금토일])\s*요일", text)
+    if d:
+        day_str = DAY_MAP.get(d.group(1))
+    return date_str, day_str
+
+
 def extract_date_from_image(img) -> tuple[str | None, str | None]:
     """
     이미지 우측 상단에서 날짜(월/일)와 요일 자동 추출.
-    예: '2026년 5월 17일 일요일' → ('5/17', '일')
+    레이아웃·크롭 차이에 대비해 여러 영역에서 시도.
     """
-    DAY_MAP = {"월": "월", "화": "화", "수": "수", "목": "목",
-               "금": "금", "토": "토", "일": "일"}
     try:
         import pytesseract
         pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
         w, h = img.size
-        date_area = img.crop((int(w * 0.55), 40, w, 95))
-        date_area = date_area.resize(
-            (date_area.width * 2, date_area.height * 2), resample=1
-        )
+        candidates = [
+            (int(w * 0.55), min(40, max(0, h // 12)), w, min(100, max(30, h // 3))),
+            (int(w * 0.45), 0, w, min(130, max(40, h // 3))),
+            (int(w * 0.35), 0, w, min(160, max(50, h // 2))),
+        ]
 
-        text = pytesseract.image_to_string(date_area, lang="kor+eng")
-
-        date_str = None
-        m = re.search(r"(\d+)월\s*(\d+)일", text)
-        if m:
-            date_str = f"{m.group(1)}/{m.group(2)}"
-
-        day_str = None
-        d = re.search(r"([월화수목금토일])요일", text)
-        if d:
-            day_str = DAY_MAP.get(d.group(1))
-
-        return date_str, day_str
+        for left, top, right, bottom in candidates:
+            left = max(0, left)
+            top = max(0, top)
+            right = max(left + 10, min(w, right))
+            bottom = max(top + 10, min(h, bottom))
+            date_area = img.crop((left, top, right, bottom))
+            if date_area.width < 20 or date_area.height < 10:
+                continue
+            date_area = date_area.resize(
+                (date_area.width * 2, date_area.height * 2), resample=1
+            )
+            text = pytesseract.image_to_string(date_area, lang="kor+eng")
+            date_str, day_str = _parse_date_ocr_text(text)
+            if date_str:
+                return date_str, day_str
     except Exception as e:
         print(f"[경고] 날짜 자동 읽기 실패: {e}")
     return None, None
@@ -177,7 +193,19 @@ def stamp_image(img, route: str, date_text: str, day_text: str,
     w, h = img.size
     result = find_route_section(img, route)
     if not result:
-        return None, f"{route}번 구역을 찾지 못했습니다."
+        headers = find_section_headers(img)
+        if headers:
+            found = ", ".join(f"{n}번" for _, n in headers)
+            return None, (
+                f"{route}번 구역을 찾지 못했습니다. "
+                f"이 화면에서 읽힌 노선: {found}. "
+                f"해당 파일에 {route}번이 없거나, 캡처에 노선 제목 줄이 잘렸을 수 있습니다."
+            )
+        return None, (
+            f"{route}번 구역을 찾지 못했습니다. "
+            f"노선 제목(검은 바·0000번)을 OCR로 읽지 못했습니다. "
+            f"스프레드시트 전체가 들어온 원본 화면인지 확인해 주세요."
+        )
 
     y_start, y_end = result
     cropped = img.crop((0, y_start, w, y_end))
