@@ -94,7 +94,38 @@ def find_section_headers(img) -> list[tuple[int, str]]:
         if m:
             route_headers.append((y, m.group(1)))
 
-    return route_headers
+    if route_headers:
+        return route_headers
+
+    # 엑셀/HTML 내보내기 등: 제목이 흰 배경·검은 글씨라 어두운 띠(밝기<80)가 없음 → OCR 스캔
+    return _find_headers_text_sweep(img)
+
+
+def _find_headers_text_sweep(img) -> list[tuple[int, str]]:
+    """검은 띠가 없는 배차표에서 왼쪽 제목 줄(0000번)을 세로로 훑어 찾기."""
+    import pytesseract
+    pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
+
+    h, w = img.size[1], img.size[0]
+    found: list[tuple[int, str]] = []
+
+    for y in range(55, h - 32, 10):
+        area = img.crop((0, y, min(w, 380), min(h, y + 38)))
+        if area.height < 15 or area.width < 40:
+            continue
+        area = area.resize((area.width * 3, area.height * 3), resample=1)
+        text = pytesseract.image_to_string(area, lang="kor+eng")
+        m = re.search(r"(\d{3,4})\s*번", text)
+        if not m:
+            continue
+        num = m.group(1)
+        if found and abs(y - found[-1][0]) < 18:
+            continue
+        if found and found[-1][1] == num and y - found[-1][0] < 120:
+            continue
+        found.append((y, num))
+
+    return found
 
 
 def _parse_date_ocr_text(text: str) -> tuple[str | None, str | None]:
