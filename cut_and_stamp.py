@@ -85,20 +85,32 @@ def find_section_headers(img) -> list[tuple[int, str]]:
         else:
             prev_dark = False
 
-    route_headers = []
+    route_dark: list[tuple[int, str]] = []
     for y in dark_ys:
         area = img.crop((0, max(0, y - 2), min(w, 280), min(h, y + 38)))
         area = area.resize((area.width * 3, area.height * 3), resample=1)
         text = pytesseract.image_to_string(area, lang="kor+eng")
         m = re.search(r"(\d{3,4})[번\-]", text)
         if m:
-            route_headers.append((y, m.group(1)))
+            route_dark.append((y, m.group(1)))
 
-    if route_headers:
-        return route_headers
+    route_sweep = _find_headers_text_sweep(img)
+    return _merge_route_headers(route_dark, route_sweep)
 
-    # 엑셀/HTML 내보내기 등: 제목이 흰 배경·검은 글씨라 어두운 띠(밝기<80)가 없음 → OCR 스캔
-    return _find_headers_text_sweep(img)
+
+def _merge_route_headers(
+    a: list[tuple[int, str]], b: list[tuple[int, str]]
+) -> list[tuple[int, str]]:
+    """y 기준 정렬 후, 같은 줄·같은 노선 중복만 제거 (두 방식 결과 합치기)."""
+    items = sorted(list(a) + list(b), key=lambda t: t[0])
+    out: list[tuple[int, str]] = []
+    for y, n in items:
+        if out and abs(y - out[-1][0]) < 12:
+            continue
+        if out and out[-1][1] == n and (y - out[-1][0]) < 90:
+            continue
+        out.append((y, n))
+    return out
 
 
 def _find_headers_text_sweep(img) -> list[tuple[int, str]]:
@@ -108,10 +120,11 @@ def _find_headers_text_sweep(img) -> list[tuple[int, str]]:
 
     h, w = img.size[1], img.size[0]
     found: list[tuple[int, str]] = []
+    step = max(5, min(8, h // 200))
 
-    for y in range(55, h - 32, 10):
-        area = img.crop((0, y, min(w, 380), min(h, y + 38)))
-        if area.height < 15 or area.width < 40:
+    for y in range(50, h - 28, step):
+        area = img.crop((0, y, min(w, 440), min(h, y + 42)))
+        if area.height < 12 or area.width < 40:
             continue
         area = area.resize((area.width * 3, area.height * 3), resample=1)
         text = pytesseract.image_to_string(area, lang="kor+eng")
@@ -119,9 +132,9 @@ def _find_headers_text_sweep(img) -> list[tuple[int, str]]:
         if not m:
             continue
         num = m.group(1)
-        if found and abs(y - found[-1][0]) < 18:
+        if found and abs(y - found[-1][0]) < (step + 4):
             continue
-        if found and found[-1][1] == num and y - found[-1][0] < 120:
+        if found and found[-1][1] == num and y - found[-1][0] < 100:
             continue
         found.append((y, num))
 
