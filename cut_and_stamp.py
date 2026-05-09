@@ -120,7 +120,8 @@ def _find_headers_text_sweep(img) -> list[tuple[int, str]]:
 
     h, w = img.size[1], img.size[0]
     found: list[tuple[int, str]] = []
-    step = max(5, min(8, h // 200))
+    # 5~6px면 '0000번'이 한두 줄 높이로만 잡히는 경우 격자를 빗나감 → 최대 4px로 제한
+    step = max(2, min(4, h // 300))
 
     for y in range(50, h - 28, step):
         area = img.crop((0, y, min(w, 440), min(h, y + 42)))
