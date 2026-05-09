@@ -1,0 +1,27 @@
+---
+description: 배차일보 절개·날짜 스탬프 워크플로 (Cutting 프로젝트)
+alwaysApply: true
+---
+
+# 배차 도구 (이 저장소)
+
+## 목적
+배차일보 **스크린샷/이미지**에서 **특정 노선 블록만 자르고**, 우측 하단에 **날짜·요일(한 글자)** 를 박는다.
+
+## 사용자가 배차 처리를 요청하면
+1. 원본 PNG/JPG가 저장소 루트(`Cutting/`)에 있는지 확인한다.
+2. **일괄 처리**: `./batch_cut.sh` (또는 `bash batch_cut.sh`). 기본은 **파일명이 숫자만**인 것만 처리(예: `17993.png`). `dbg_*`, `debug_*` 는 제외.
+3. **노선만 바꿀 때**: `./batch_cut.sh --route 5003`
+4. **노선 목록 확인만**: `./batch_cut.sh --list`
+5. **파일명이 규칙과 다를 때**: `./batch_cut.sh --all` (단, `*번_*.*`·dbg·debug 는 제외)
+6. 결과는 **`결과/`** 아래 `5002번_<원본stem>.png` 형식.
+7. 날짜 OCR 실패 시: `venv/bin/python cut_and_stamp.py --input 파일.png --date M/D --day 화 --output 결과/...`
+8. 코드 변경 후 원격 배포: `main` 푸시 시 **Render(Docker)** 자동 배포 연동됨.
+
+## 핵심 파일
+- `cut_and_stamp.py` — CLI·탐지·스탬프
+- `batch_cut.sh` — 로컬 반복용 배치
+- `app.py` — 웹 업로드(Render)
+
+## 구현·디버깅 시
+레이아웃이 바뀌면 `_find_headers_text_sweep`, `find_route_section`, `extract_date_from_image` 쪽을 의심한다. 흰 배경 표는 OCR 세로 스캔 step이 중요하다.
